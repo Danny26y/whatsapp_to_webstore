@@ -66,34 +66,47 @@ async def webhook_post(request: Request):
     return {"status": "success"}
 
 
+import json # Add this import at the top
+
 async def call_gemini(image_path: str, caption: str):
     """
     Calls the Gemini API to extract product data from an image and caption.
+    Uses Native JSON mode for reliability.
     """
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    prompt = "Extract product name, price (integer), currency, and category from this image and caption. Return strictly JSON."
+    # Initialize the model with specific config for JSON output
+    model = genai.GenerativeModel(
+        'gemini-1.5-flash',
+        generation_config={"response_mime_type": "application/json"}
+    )
+    
+    prompt = """
+    Analyze this image and caption to extract product details.
+    Return a JSON object with these exact keys:
+    - product_name (string)
+    - price (integer, numbers only, no symbols)
+    - currency (string, default to NGN if unsure)
+    - category (string, e.g., 'Fashion', 'Electronics')
+    - size_or_variant (string or null)
+    """
 
-    # Open the image file
-    with open(image_path, 'rb') as image_file:
-        image_data = image_file.read()
-
-    # Create the payload for the Gemini API
-    with Image.open(image_path) as img:
-        mime_type = f"image/{img.format.lower()}"
-
-    image_parts = [
-        {"mime_type": mime_type, "data": image_data}
-    ]
-
-    contents = [image_parts[0], {"text": f"{prompt}\n\n{caption}"}]
+    # Open the image using PIL (standard way for this library)
+    img = Image.open(image_path)
 
     try:
-        response = await model.generate_content_async(contents)
-        # Clean the response to ensure it's valid JSON
-        cleaned_response = response.text.strip().replace("```json", "").replace("```", "")
-        return Response(content=cleaned_response, media_type="application/json")
+        # Pass the PIL image object directly
+        response = await model.generate_content_async([prompt, caption, img])
+        
+        # Since we enforced JSON mode, response.text is guaranteed to be clean JSON
+        return Response(content=response.text, media_type="application/json")
+        
     except Exception as e:
-        return Response(content={"error": str(e)}, status_code=500, media_type="application/json")
+        print(f"Gemini Error: {e}")
+        # Return a safe fallback JSON so the app doesn't crash
+        return Response(
+            content=json.dumps({"error": "Failed to analyze image", "details": str(e)}), 
+            status_code=500, 
+            media_type="application/json"
+        )
 
 
 @app.get("/")
