@@ -8,4 +8,4 @@ Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
 
-Route::post('/products/ingest', [ProductIngestionController::class, 'ingest']);
+Route::middleware('auth:sanctum')->post('/v1/ingest-product', [ProductIngestionController::class, 'store']);
