@@ -8,9 +8,44 @@ from PIL import Image
 import json
 import requests
 import asyncio
+import time
 from pydantic import BaseModel
 
 load_dotenv()
+
+CACHE_FILE = "temp/cache.json"
+
+def load_cache():
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def save_cache(cache):
+    temp_dir = "temp"
+    if not os.path.exists(temp_dir):
+        os.makedirs(temp_dir)
+    with open(CACHE_FILE, "w") as f:
+        json.dump(cache, f)
+
+async def send_whatsapp_message(phone_number: str, text: str):
+    phone_id = os.getenv("WHATSAPP_PHONE_ID", "default_id")
+    url = f"https://graph.facebook.com/v20.0/{phone_id}/messages"
+    headers = {
+        "Authorization": f"Bearer {os.getenv('WHATSAPP_TOKEN')}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone_number,
+        "type": "text",
+        "text": {"body": text}
+    }
+    async with httpx.AsyncClient() as client:
+        await client.post(url, headers=headers, json=payload)
 
 class ProductData(BaseModel):
     Name: str
@@ -78,30 +113,59 @@ async def webhook_post(request: Request):
 
                                     whatsapp_number = message.get("from", "unknown")
 
-                                    # Post to Laravel
-                                    laravel_url = "http://127.0.0.1:8000/api/v1/ingest-product"
-                                    payload = {
-                                        "whatsapp_number": whatsapp_number,
-                                        "product_name": product_data.Name,
-                                        "price": product_data.Price,
-                                        "description": product_data.Description,
-                                        "image_url": image_url
+                                    cache = load_cache()
+                                    cache[whatsapp_number] = {
+                                        "data": product_data.model_dump(),
+                                        "image_url": image_url,
+                                        "timestamp": time.time()
                                     }
-                                    headers = {
-                                        "Authorization": f"Bearer {os.getenv('API_TOKEN', 'secret-token')}"
-                                    }
+                                    save_cache(cache)
 
-                                    response_post = await asyncio.to_thread(requests.post, laravel_url, json=payload, headers=headers)
+                                    msg = f"I found: {product_data.Name} at {product_data.Price}. Reply YES to list this or NO to cancel."
+                                    await send_whatsapp_message(whatsapp_number, msg)
 
-                                    return {
-                                        "status": "success",
-                                        "laravel_status": response_post.status_code,
-                                        "laravel_response": response_post.text,
-                                        "product_data": product_data.model_dump()
-                                    }
+                                    return {"status": "success", "message": "Pending confirmation"}
                                 finally:
                                     if os.path.exists(file_path):
                                         os.remove(file_path)
+                elif message["type"] == "text":
+                    whatsapp_number = message.get("from", "unknown")
+                    text_body = message.get("text", {}).get("body", "").strip().upper()
+
+                    cache = load_cache()
+                    if whatsapp_number in cache:
+                        entry = cache[whatsapp_number]
+                        if time.time() - entry["timestamp"] < 600:
+                            if text_body == "YES":
+                                product_data = entry["data"]
+                                image_url = entry["image_url"]
+                                laravel_url = os.getenv("LARAVEL_API_URL", "http://127.0.0.1:8000/api/v1/ingest-product")
+                                payload = {
+                                    "whatsapp_number": whatsapp_number,
+                                    "product_name": product_data["Name"],
+                                    "price": product_data["Price"],
+                                    "description": product_data["Description"],
+                                    "image_url": image_url
+                                }
+                                headers = {
+                                    "Authorization": f"Bearer {os.getenv('API_TOKEN', 'secret-token')}"
+                                }
+                                await asyncio.to_thread(requests.post, laravel_url, json=payload, headers=headers)
+                                await send_whatsapp_message(whatsapp_number, "Product has been successfully listed!")
+
+                                del cache[whatsapp_number]
+                                save_cache(cache)
+                                return {"status": "success", "action": "listed"}
+
+                            elif text_body == "NO":
+                                await send_whatsapp_message(whatsapp_number, "Listing cancelled.")
+                                del cache[whatsapp_number]
+                                save_cache(cache)
+                                return {"status": "success", "action": "cancelled"}
+
+                        else:
+                            del cache[whatsapp_number]
+                            save_cache(cache)
 
     return {"status": "success"}
 

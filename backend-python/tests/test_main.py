@@ -76,16 +76,40 @@ def test_webhook_post_image(mock_gemini, mock_httpx_get):
         }]
     }
 
-    with patch('main.requests.post') as mock_requests_post:
-        mock_response = MagicMock()
-        mock_response.status_code = 201
-        mock_response.text = '{"product_id": 1}'
-        mock_requests_post.return_value = mock_response
+    with patch('main.httpx.AsyncClient.post') as mock_httpx_post:
+        # Mock the Meta messages endpoint
+        mock_post_response = MagicMock()
+        mock_post_response.status_code = 200
+        mock_httpx_post.return_value = mock_post_response
 
         response = client.post("/webhook", json=payload)
 
         assert response.status_code == 200
         response_json = response.json()
         assert response_json["status"] == "success"
-        assert response_json["laravel_status"] == 201
-        assert response_json["product_data"] == {"Name": "Test Product", "Price": 100.0, "Description": "Test Description"}
+        assert response_json["message"] == "Pending confirmation"
+
+        # Now test text reply YES
+        payload_text_yes = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [{
+                            "from": "1234567890",
+                            "type": "text",
+                            "text": {"body": "YES"}
+                        }]
+                    }
+                }]
+            }]
+        }
+
+        with patch('main.requests.post') as mock_requests_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 201
+            mock_requests_post.return_value = mock_response
+
+            response_yes = client.post("/webhook", json=payload_text_yes)
+            assert response_yes.status_code == 200
+            assert response_yes.json()["action"] == "listed"
+            mock_requests_post.assert_called_once()
