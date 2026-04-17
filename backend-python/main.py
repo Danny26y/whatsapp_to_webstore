@@ -5,8 +5,17 @@ from dotenv import load_dotenv
 import httpx
 import shutil
 from PIL import Image
+import json
+import requests
+import asyncio
+from pydantic import BaseModel
 
 load_dotenv()
+
+class ProductData(BaseModel):
+    Name: str
+    Price: float
+    Description: str
 
 app = FastAPI()
 
@@ -57,16 +66,45 @@ async def webhook_post(request: Request):
                                         f.write(image_response.content)
 
                                     # Call Gemini API with the image and caption
-                                    gemini_response = await call_gemini(file_path, image_caption)
-                                    return gemini_response
+                                    gemini_text = await call_gemini(file_path, image_caption)
+
+                                    # Parse and validate with Pydantic
+                                    try:
+                                        data_dict = json.loads(gemini_text)
+                                        product_data = ProductData(**data_dict)
+                                    except Exception as e:
+                                        print(f"Validation Error: {e}")
+                                        return {"status": "error", "message": "Failed to validate product data"}
+
+                                    whatsapp_number = message.get("from", "unknown")
+
+                                    # Post to Laravel
+                                    laravel_url = "http://127.0.0.1:8000/api/v1/ingest-product"
+                                    payload = {
+                                        "whatsapp_number": whatsapp_number,
+                                        "product_name": product_data.Name,
+                                        "price": product_data.Price,
+                                        "description": product_data.Description,
+                                        "image_url": image_url
+                                    }
+                                    headers = {
+                                        "Authorization": f"Bearer {os.getenv('API_TOKEN', 'secret-token')}"
+                                    }
+
+                                    response_post = await asyncio.to_thread(requests.post, laravel_url, json=payload, headers=headers)
+
+                                    return {
+                                        "status": "success",
+                                        "laravel_status": response_post.status_code,
+                                        "laravel_response": response_post.text,
+                                        "product_data": product_data.model_dump()
+                                    }
                                 finally:
                                     if os.path.exists(file_path):
                                         os.remove(file_path)
 
     return {"status": "success"}
 
-
-import json # Add this import at the top
 
 async def call_gemini(image_path: str, caption: str):
     """
@@ -82,11 +120,9 @@ async def call_gemini(image_path: str, caption: str):
     prompt = """
     Analyze this image and caption to extract product details.
     Return a JSON object with these exact keys:
-    - product_name (string)
-    - price (integer, numbers only, no symbols)
-    - currency (string, default to NGN if unsure)
-    - category (string, e.g., 'Fashion', 'Electronics')
-    - size_or_variant (string or null)
+    - Name (string)
+    - Price (float, numbers only, no symbols)
+    - Description (string)
     """
 
     # Open the image using PIL (standard way for this library)
@@ -97,16 +133,12 @@ async def call_gemini(image_path: str, caption: str):
         response = await model.generate_content_async([prompt, caption, img])
         
         # Since we enforced JSON mode, response.text is guaranteed to be clean JSON
-        return Response(content=response.text, media_type="application/json")
+        return response.text
         
     except Exception as e:
         print(f"Gemini Error: {e}")
         # Return a safe fallback JSON so the app doesn't crash
-        return Response(
-            content=json.dumps({"error": "Failed to analyze image", "details": str(e)}), 
-            status_code=500, 
-            media_type="application/json"
-        )
+        return json.dumps({"error": "Failed to analyze image", "details": str(e)})
 
 
 @app.get("/")
