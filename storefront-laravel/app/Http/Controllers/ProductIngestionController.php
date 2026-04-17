@@ -6,6 +6,9 @@ use App\Models\Product;
 use App\Models\Tenant;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 
 class ProductIngestionController extends Controller
 {
@@ -31,13 +34,25 @@ class ProductIngestionController extends Controller
             return response()->json(['error' => 'Tenant not found'], 404);
         }
 
+        // Handle Image Upload to Cloudinary
+        $imageResponse = Http::withToken(env('WHATSAPP_TOKEN'))->get($request->input('image_url'));
+
+        if (!$imageResponse->successful()) {
+            return response()->json(['error' => 'Failed to download image from Meta'], 400);
+        }
+
+        $imageContent = $imageResponse->body();
+        $filename = 'products/' . Str::uuid() . '.jpg';
+        Storage::disk('cloudinary')->put($filename, $imageContent);
+        $secureUrl = Storage::disk('cloudinary')->url($filename);
+
         // Create Product
         $product = new Product();
         $product->tenant_id = $tenant->id;
         $product->name = $request->input('product_name');
         $product->price = $request->input('price');
         $product->category = $request->input('description'); // Mapping description to category as requested
-        $product->image_url = $request->input('image_url');
+        $product->image_url = $secureUrl;
         $product->save();
 
         // Return Response
