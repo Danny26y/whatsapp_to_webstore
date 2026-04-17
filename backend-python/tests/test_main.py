@@ -56,7 +56,7 @@ def test_webhook_post_image(mock_gemini, mock_httpx_get):
 
     # Mock the response from Gemini
     mock_gemini_response = MagicMock()
-    mock_gemini_response.text = '{"product_name": "Test Product", "price": 100, "currency": "USD", "category": "Test"}'
+    mock_gemini_response.text = '{"Name": "Test Product", "Price": 100.0, "Description": "Test Description"}'
     mock_gemini.return_value = mock_gemini_response
 
     payload = {
@@ -64,6 +64,7 @@ def test_webhook_post_image(mock_gemini, mock_httpx_get):
             "changes": [{
                 "value": {
                     "messages": [{
+                        "from": "1234567890",
                         "type": "image",
                         "image": {
                             "id": "12345",
@@ -75,6 +76,40 @@ def test_webhook_post_image(mock_gemini, mock_httpx_get):
         }]
     }
 
-    response = client.post("/webhook", json=payload)
-    assert response.status_code == 200
-    assert response.json() == {"product_name": "Test Product", "price": 100, "currency": "USD", "category": "Test"}
+    with patch('main.httpx.AsyncClient.post') as mock_httpx_post:
+        # Mock the Meta messages endpoint
+        mock_post_response = MagicMock()
+        mock_post_response.status_code = 200
+        mock_httpx_post.return_value = mock_post_response
+
+        response = client.post("/webhook", json=payload)
+
+        assert response.status_code == 200
+        response_json = response.json()
+        assert response_json["status"] == "success"
+        assert response_json["message"] == "Pending confirmation"
+
+        # Now test text reply YES
+        payload_text_yes = {
+            "entry": [{
+                "changes": [{
+                    "value": {
+                        "messages": [{
+                            "from": "1234567890",
+                            "type": "text",
+                            "text": {"body": "YES"}
+                        }]
+                    }
+                }]
+            }]
+        }
+
+        with patch('main.requests.post') as mock_requests_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 201
+            mock_requests_post.return_value = mock_response
+
+            response_yes = client.post("/webhook", json=payload_text_yes)
+            assert response_yes.status_code == 200
+            assert response_yes.json()["action"] == "listed"
+            mock_requests_post.assert_called_once()

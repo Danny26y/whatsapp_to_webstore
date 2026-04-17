@@ -5,3 +5,5 @@ google-generativeai
 httpx
 python-multipart
 Pillow
+pydantic
+requests
