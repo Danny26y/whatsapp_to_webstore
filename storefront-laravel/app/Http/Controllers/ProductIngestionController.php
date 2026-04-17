@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use CloudinaryLabs\CloudinaryLaravel\Facades\Cloudinary;
 
 class ProductIngestionController extends Controller
 {
@@ -35,16 +36,7 @@ class ProductIngestionController extends Controller
         }
 
         // Handle Image Upload to Cloudinary
-        $imageResponse = Http::withToken(env('WHATSAPP_TOKEN'))->get($request->input('image_url'));
-
-        if (!$imageResponse->successful()) {
-            return response()->json(['error' => 'Failed to download image from Meta'], 400);
-        }
-
-        $imageContent = $imageResponse->body();
-        $filename = 'products/' . Str::uuid() . '.jpg';
-        Storage::disk('cloudinary')->put($filename, $imageContent);
-        $secureUrl = Storage::disk('cloudinary')->url($filename);
+        $secureUrl = Cloudinary::upload($request->image_url)->getSecurePath();
 
         // Create Product
         $product = new Product();
